@@ -1,28 +1,33 @@
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, update
-from fastapi import FastAPI, Request, Depends, Cookie, Response
-from sqlalchemy import MetaData, Table, Column, Integer, String,DateTime
+from fastapi import FastAPI, Request, Depends, HTTPException, Response
+from sqlalchemy import MetaData, Table, Column, Integer, String
 from pydantic import BaseModel
 import os
-import bcrypt
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
-import secrets
+from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
 
 
 load_dotenv()
 
 app= FastAPI()
 database_url = os.getenv("DATABASE_URL")
-
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRES_MINUTES = 30
 
 engine = create_engine(database_url)
+print("----------------------------------------")
 print("database connection is successful")
+print("----------------------------------------")
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base() #link python calss with databse directly.
+Base = declarative_base() #link python calss with database directly.
 
 def get_db():
     db = SessionLocal()
@@ -31,21 +36,13 @@ def get_db():
     finally:
         db.close()
 
-class UserSession(Base):
-    __tablename__ = "user_sessions"
-
-    session_id = Column(String, primary_key=True)
-    user_id = Column(Integer, nullable=False)
-    expires_at = Column(DateTime, nullable=False)
-
-
 
 class User_role(Base): #user table structure in postgres database.
     __tablename__ = "users_role"
     user_id = Column(Integer, primary_key=True)
     email = Column(String, unique=True)
     username = Column(String, unique=True)
-    hashed_password =Column(String, unique=True)
+    hashed_password =Column(String, unique=False)
 
 
 class UserCreate(BaseModel): #Validate incoming JSON data from the registration form.
@@ -62,11 +59,67 @@ class UserResponse(BaseModel):
         from_attributes = True
 
 pwd_context = CryptContext(schemes=["bcrypt"],deprecated = "auto")
+
+
+
 def hashed_password(password: str):
     return pwd_context.hash(password)
 
 def verify_password(plain_password:str, hashed_password:str):
     return pwd_context.verify(plain_password,hashed_password)
+
+def create_access_token(user_id:int):
+    expire = datetime.now(timezone.utc) + timedelta(minutes= JWT_EXPIRES_MINUTES)
+    payload={
+        "sub" : str(user_id),
+        "exp" : expire
+    }
+    token = jwt.encode(
+        payload,
+        JWT_SECRET_KEY,
+        algorithm=JWT_ALGORITHM
+    )
+    return token
+
+security = HTTPBearer()
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+        token = credentials.credentials
+        try:
+            payload = jwt.decode(
+            token,
+            JWT_SECRET_KEY,
+            algorithms=[JWT_ALGORITHM]
+            )
+
+            user_id = payload.get("sub")
+
+            if user_id is None:
+                raise HTTPException(
+                status_code=401,
+                detail="Invalid token"
+            )
+            user_id = int(user_id)
+        except JWTError:
+            raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token"
+            )
+
+        user = db.query(User_role).filter(
+            User_role.user_id == user_id
+            ).first()
+
+        if not user:
+            raise HTTPException(
+            status_code=401,
+            detail="User not found"
+        )
+
+        return user
+
 
 
 @app.post("/register")  #user registration 
@@ -100,7 +153,7 @@ class LoginRequest(BaseModel):
 
 
 @app.post("/login")
-def login(user_data:LoginRequest,response :Response, db: Session = Depends(get_db)):
+def login(user_data:LoginRequest, response: Response, db: Session = Depends(get_db)):
     user = db.query(User_role).filter(
         User_role.email == user_data.email
     ).first()
@@ -113,66 +166,47 @@ def login(user_data:LoginRequest,response :Response, db: Session = Depends(get_d
         return{
             "status":"invalid password"
         }
-
-    session_id = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
-
-    print("-------------------------------------")
-    print("SESSION CREATED")
-    print("session_id:", session_id)
-    print("user_id:", user.user_id)
-    print("created_at:", datetime.now(timezone.utc))
-    print("expires_at:", expires_at)
-    print("------------------------------------")
-
-    new_session = UserSession(
-        session_id=session_id,
-        user_id=user.user_id,
-        expires_at=expires_at
-    )
-
-    db.add(new_session)
     db.commit()
 
+    access_token = create_access_token(user.user_id)
     response.set_cookie(
-        key="session_id",
-        value=session_id,
-        max_age=604800, #7 days in seconds
-        httponly=True,   # Prevents JavaScript access (protects against XSS)
-        secure=True,     # Ensures cookie is only sent over encrypted HTTPS
-        samesite="lax")
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=1800)
 
+    
     return {
+        "access_token":access_token,
+        "token_type": "bearer",
         "user_id": user.user_id,
         "username": user.username,
         "email": user.email,
         "status":"login succeesful"
     }
 
+class LogoutRequest(BaseModel):
+    email: EmailStr
+    password :str
 
 @app.post("/logout")
-def logout(
-    response: Response,
-    session_id: str = Cookie(None),
-    db: Session = Depends(get_db)
-):
-    if session_id:
-        session = db.query(UserSession).filter(
-            UserSession.session_id == session_id
-        ).first()
+def logout(user_data:LogoutRequest, response:Response):
+    response.delete_cookie(
+        key="access_token",
+        httponly=True,
+        secure=True,
+        samesite="lax"
+    )
+    return{
+        "status":"sucessfully logout",
+        "user_data": user_data
 
-        if session:
-            db.delete(session)
-            db.commit()
-
-    response.delete_cookie("session_id")
-
-    return {
-        "status": "logout successful"
     }
 
 
-#helath check
+#health check
 @app.get("/health")
 def health():
     return {"message": "OK"}
@@ -185,7 +219,7 @@ class user_request(BaseModel):
     user_id : int
     
 @app.post("/users_details")
-def users_details(request: user_request):
+def users_details(request: user_request, current_user : User_role = Depends(get_current_user)):
     with engine.connect() as conn:
         result = conn.execute(
             user_table_name.select().where(
@@ -193,11 +227,11 @@ def users_details(request: user_request):
         return [dict(row._mapping) for row in result]
 
 @app.post("/get_user_past_n_orders")
-def get_user_past_orders(request: user_request):
+def get_user_past_orders(current_user :User_role = Depends(get_current_user)):
     with engine.connect() as conn:
         result = conn.execute(
             order_table_name.select().where(
-                order_table_name.c.user_id == request.user_id))
+                order_table_name.c.user_id == current_user.user_id))
         return [dict(row._mapping) for row in result]
 
 product_table_name = Table("products", metadata, autoload_with=engine)
