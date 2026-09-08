@@ -1,33 +1,33 @@
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, update
-from fastapi import FastAPI, Request, Depends, HTTPException, Response
-from sqlalchemy import MetaData, Table, Column, Integer, String
-from pydantic import BaseModel
+from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String
+from fastapi import FastAPI, Depends, HTTPException, Response
+from pydantic import BaseModel, EmailStr
 import os
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
-from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-
-
 load_dotenv()
 
-app= FastAPI()
+app = FastAPI()
+
 database_url = os.getenv("DATABASE_URL")
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRES_MINUTES = 30
 
 engine = create_engine(database_url)
-print("----------------------------------------")
-print("database connection is successful")
-print("----------------------------------------")
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base() #link python calss with database directly.
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
+
+Base = declarative_base()
+
 
 def get_db():
     db = SessionLocal()
@@ -37,288 +37,383 @@ def get_db():
         db.close()
 
 
-class User_role(Base): #user table structure in postgres database.
+class User_role(Base):
     __tablename__ = "users_role"
+
     user_id = Column(Integer, primary_key=True)
     email = Column(String, unique=True)
     username = Column(String, unique=True)
-    hashed_password =Column(String, unique=False)
+    hashed_password = Column(String)
 
 
-class UserCreate(BaseModel): #Validate incoming JSON data from the registration form.
-    username : str
-    email : EmailStr
-    password : str
+class UserCreate(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+
 
 class UserResponse(BaseModel):
-    user_id : int
-    username : str
+    user_id: int
+    username: str
     email: EmailStr
 
-    class config:
-        from_attributes = True
 
-pwd_context = CryptContext(schemes=["bcrypt"],deprecated = "auto")
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
 
 
+class ProductRequest(BaseModel):
+    product_id: int
+    quantity: int
 
-def hashed_password(password: str):
+
+class CartRequest(BaseModel):
+    total_amount: float
+
+
+class OrderRequest(BaseModel):
+    total_amount: float
+
+
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto"
+)
+
+
+def hashed_password(password):
     return pwd_context.hash(password)
 
-def verify_password(plain_password:str, hashed_password:str):
-    return pwd_context.verify(plain_password,hashed_password)
 
-def create_access_token(user_id:int):
-    expire = datetime.now(timezone.utc) + timedelta(minutes= JWT_EXPIRES_MINUTES)
-    payload={
-        "sub" : str(user_id),
-        "exp" : expire
+def verify_password(password, hashed_password):
+    return pwd_context.verify(password, hashed_password)
+
+
+def create_access_token(user_id: int):
+    expire = datetime.now(timezone.utc) + timedelta(
+        minutes=JWT_EXPIRES_MINUTES
+    )
+
+    payload = {
+        "sub": str(user_id),
+        "exp": expire
     }
-    token = jwt.encode(
+
+    return jwt.encode(
         payload,
         JWT_SECRET_KEY,
         algorithm=JWT_ALGORITHM
     )
-    return token
+
 
 security = HTTPBearer()
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security),
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
-        token = credentials.credentials
-        try:
-            payload = jwt.decode(
+    token = credentials.credentials
+
+    try:
+        payload = jwt.decode(
             token,
             JWT_SECRET_KEY,
             algorithms=[JWT_ALGORITHM]
-            )
+        )
 
-            user_id = payload.get("sub")
+        user_id = payload.get("sub")
 
-            if user_id is None:
-                raise HTTPException(
+        if user_id is None:
+            raise HTTPException(
                 status_code=401,
                 detail="Invalid token"
             )
-            user_id = int(user_id)
-        except JWTError:
-            raise HTTPException(
+
+        user_id = int(user_id)
+
+    except (JWTError, ValueError):
+        raise HTTPException(
             status_code=401,
             detail="Invalid or expired token"
-            )
+        )
 
-        user = db.query(User_role).filter(
-            User_role.user_id == user_id
-            ).first()
+    user = db.query(User_role).filter(
+        User_role.user_id == user_id
+    ).first()
 
-        if not user:
-            raise HTTPException(
+    if not user:
+        raise HTTPException(
             status_code=401,
             detail="User not found"
         )
 
-        return user
+    return user
 
 
+metadata = MetaData()
 
-@app.post("/register")  #user registration 
-def register(user_data : UserCreate , db : Session = Depends(get_db)):
-    existing_mail = db.query(
-        User_role
-        ).filter(User_role.email == user_data.email).first()
-    if existing_mail: #check existing email
-        return{
+user_table_name = Table(
+    "users",
+    metadata,
+    autoload_with=engine
+)
+
+product_table_name = Table(
+    "products",
+    metadata,
+    autoload_with=engine
+)
+
+cart_table_name = Table(
+    "cart",
+    metadata,
+    autoload_with=engine
+)
+
+inventory_table_name = Table(
+    "inventory",
+    metadata,
+    autoload_with=engine
+)
+
+order_table_name = Table(
+    "orders",
+    metadata,
+    autoload_with=engine
+)
+
+
+@app.post("/register")
+def register(
+    user_data: UserCreate,
+    db: Session = Depends(get_db)
+):
+    existing_mail = db.query(User_role).filter(
+        User_role.email == user_data.email
+    ).first()
+
+    if existing_mail:
+        return {
             "status": "email is already registered"
         }
-    secure_password = hashed_password(user_data.password)
 
     new_user = User_role(
         username=user_data.username,
         email=user_data.email,
-        hashed_password=secure_password)  
-    
+        hashed_password=hashed_password(user_data.password)
+    )
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    return{
+    return {
         "status": "User created successfully",
+        "user_id": new_user.user_id,
         "email": new_user.email
     }
 
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password :str
-
 
 @app.post("/login")
-def login(user_data:LoginRequest, response: Response, db: Session = Depends(get_db)):
+def login(
+    user_data: LoginRequest,
+    response: Response,
+    db: Session = Depends(get_db)
+):
     user = db.query(User_role).filter(
         User_role.email == user_data.email
     ).first()
+
     if not user:
-        return{
-            "status":"user not found"
+        return {
+            "status": "user not found"
         }
 
-    if not verify_password(user_data.password,user.hashed_password):
-        return{
-            "status":"invalid password"
+    if not verify_password(
+        user_data.password,
+        user.hashed_password
+    ):
+        return {
+            "status": "invalid password"
         }
-    db.commit()
 
     access_token = create_access_token(user.user_id)
+
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=True,
+        secure=False,
         samesite="lax",
-        max_age=1800)
+        max_age=1800
+    )
 
-    
     return {
-        "access_token":access_token,
+        "access_token": access_token,
         "token_type": "bearer",
         "user_id": user.user_id,
         "username": user.username,
         "email": user.email,
-        "status":"login succeesful"
+        "status": "login successful"
     }
 
-class LogoutRequest(BaseModel):
-    email: EmailStr
-    password :str
 
 @app.post("/logout")
-def logout(user_data:LogoutRequest, response:Response):
-    response.delete_cookie(
-        key="access_token",
-        httponly=True,
-        secure=True,
-        samesite="lax"
-    )
-    return{
-        "status":"sucessfully logout",
-        "user_data": user_data
+def logout(response: Response):
+    response.delete_cookie("access_token")
 
+    return {
+        "status": "successfully logout"
     }
 
 
-#health check
 @app.get("/health")
 def health():
-    return {"message": "OK"}
+    return {
+        "message": "OK"
+    }
 
-metadata = MetaData()
 
-user_table_name = Table("users", metadata, autoload_with=engine)
+@app.get("/users_details")
+def users_details(
+    current_user: User_role = Depends(get_current_user)
+):
+    return {
+        "user_id": current_user.user_id,
+        "username": current_user.username,
+        "email": current_user.email
+    }
 
-class user_request(BaseModel):
-    user_id : int
-    
-@app.post("/users_details")
-def users_details(request: user_request, current_user : User_role = Depends(get_current_user)):
-    with engine.connect() as conn:
-        result = conn.execute(
-            user_table_name.select().where(
-                user_table_name.c.user_id == request.user_id))
-        return [dict(row._mapping) for row in result]
 
-@app.post("/get_user_past_n_orders")
-def get_user_past_orders(current_user :User_role = Depends(get_current_user)):
+@app.get("/get_user_past_n_orders")
+def get_user_past_orders(
+    current_user: User_role = Depends(get_current_user)
+):
     with engine.connect() as conn:
         result = conn.execute(
             order_table_name.select().where(
-                order_table_name.c.user_id == current_user.user_id))
+                order_table_name.c.user_id == current_user.user_id
+            )
+        )
+
         return [dict(row._mapping) for row in result]
 
-product_table_name = Table("products", metadata, autoload_with=engine)
-cart_table_name = Table("cart", metadata, autoload_with=engine)
-inventory_table_name = Table("inventory", metadata, autoload_with=engine)
-order_table_name =Table("orders", metadata, autoload_with=engine)
 
-
-class product_request(BaseModel):
-    product_id : int
-    quantity : int
-    user_id :int
-
-@app.post('/check_inventory')
-def check_inventory(request: product_request):
-
+@app.post("/check_inventory")
+def check_inventory(
+    request: ProductRequest,
+    current_user: User_role = Depends(get_current_user)
+):
     with engine.connect() as conn:
         result = conn.execute(
             inventory_table_name.select().where(
                 inventory_table_name.c.product_id == request.product_id
-            )).fetchone()
-        
-    inventory = dict(result._mapping)
-    if inventory['available_quantity'] >= request.quantity:
-        return {
+            )
+        ).fetchone()
 
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found in inventory"
+        )
+
+    inventory = dict(result._mapping)
+
+    if inventory["available_quantity"] >= request.quantity:
+        return {
             "available": True,
             "product_id": request.product_id,
             "requested_quantity": request.quantity,
+            "available_quantity": inventory["available_quantity"]
         }
 
-        
-    else:
-        return {
-                'available': False,
-                'available_quantity': inventory['available_quantity'],
-                'product_id': request.product_id
-                }
+    return {
+        "available": False,
+        "product_id": request.product_id,
+        "requested_quantity": request.quantity,
+        "available_quantity": inventory["available_quantity"]
+    }
 
 
 @app.post("/purchase_order")
-def purchase_order(request: product_request):
-    inventory = check_inventory(request)
-    if inventory['available'] == False:
-        return {
-            "status":"no stock"
-        }
-    with engine.connect() as conn:
-        result=conn.execute(
+def purchase_order(
+    request: ProductRequest,
+    current_user: User_role = Depends(get_current_user)
+):
+    with engine.begin() as conn:
+
+        product_result = conn.execute(
             product_table_name.select().where(
                 product_table_name.c.product_id == request.product_id
             )
         ).fetchone()
-    product = dict(result._mapping)
-    total_amount = product['price'] * request.quantity
-    inventory_result = inventory_update(request)
 
+        if product_result is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Product not found"
+            )
 
-    order_result = create_order(
-        order_request(
-        user_id=request.user_id,
-        total_amount=total_amount
+        product = dict(product_result._mapping)
+
+        total_amount = product["price"] * request.quantity
+
+        inventory_result = conn.execute(
+            inventory_table_name.update()
+            .where(
+                inventory_table_name.c.product_id == request.product_id,
+                inventory_table_name.c.available_quantity >= request.quantity
+            )
+            .values(
+                reserved_quantity=(
+                    inventory_table_name.c.reserved_quantity
+                    + request.quantity
+                ),
+                available_quantity=(
+                    inventory_table_name.c.available_quantity
+                    - request.quantity
+                )
+            )
         )
-    )
+
+        if inventory_result.rowcount != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Insufficient stock"
+            )
+
+        order_result = conn.execute(
+            order_table_name.insert()
+            .values(
+                user_id=current_user.user_id,
+                total_amount=total_amount
+            )
+            .returning(order_table_name.c.order_id)
+        )
+
+        order_id = order_result.scalar_one()
+
     return {
         "status": "purchase successful",
-        "user_id": request.user_id,
+        "user_id": current_user.user_id,
         "product_id": request.product_id,
         "quantity": request.quantity,
         "total_amount": total_amount,
-        "inventory": inventory_result,
-        "order": order_result
+        "order_id": order_id
     }
 
 
-
-class cart_request(BaseModel):
-    user_id: int
-    total_amount: float
-
-
 @app.post("/create_cart")
-def create_cart(request: cart_request):
-    with engine.connect() as conn:
+def create_cart(
+    request: CartRequest,
+    current_user: User_role = Depends(get_current_user)
+):
+    with engine.begin() as conn:
         conn.execute(
             cart_table_name.insert().values(
-                user_id=request.user_id,
+                user_id=current_user.user_id,
                 total_amount=request.total_amount
             )
         )
@@ -326,46 +421,69 @@ def create_cart(request: cart_request):
     return {
         "cart": True,
         "status": "cart is created",
-        "user_id": request.user_id,
+        "user_id": current_user.user_id,
         "total_amount": request.total_amount
     }
 
-class order_request(BaseModel):
-    user_id: int
-    total_amount:float
 
 @app.post("/create_order")
-def create_order(request: order_request):
-    with engine.connect() as conn:
-        conn.execute(
-            order_table_name.insert().values(
-                user_id=request.user_id,
+def create_order(
+    request: OrderRequest,
+    current_user: User_role = Depends(get_current_user)
+):
+    with engine.begin() as conn:
+        result = conn.execute(
+            order_table_name.insert()
+            .values(
+                user_id=current_user.user_id,
                 total_amount=request.total_amount
             )
+            .returning(order_table_name.c.order_id)
         )
+
+        order_id = result.scalar_one()
 
     return {
         "order": True,
         "status": "order is created",
-        "user_id": request.user_id,
+        "order_id": order_id,
+        "user_id": current_user.user_id,
         "total_amount": request.total_amount
     }
 
-@app.post('/inventory_update')
-def inventory_update(request: product_request):
-    with engine.connect() as conn:
-        conn.execute(
-            inventory_table_name.update().where(
-                inventory_table_name.c.product_id == request.product_id
-            ).values(
-                reserved_quantity= inventory_table_name.c.reserved_quantity + request.quantity,
-                available_quantity = inventory_table_name.c.available_quantity - request.quantity
+
+@app.post("/inventory_update")
+def inventory_update(
+    request: ProductRequest,
+    current_user: User_role = Depends(get_current_user)
+):
+    with engine.begin() as conn:
+        result = conn.execute(
+            inventory_table_name.update()
+            .where(
+                inventory_table_name.c.product_id == request.product_id,
+                inventory_table_name.c.available_quantity >= request.quantity
+            )
+            .values(
+                reserved_quantity=(
+                    inventory_table_name.c.reserved_quantity
+                    + request.quantity
+                ),
+                available_quantity=(
+                    inventory_table_name.c.available_quantity
+                    - request.quantity
+                )
             )
         )
-    return{
-        "status":"inventory updated",
+
+        if result.rowcount != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Insufficient stock or product not found"
+            )
+
+    return {
+        "status": "inventory updated",
         "product_id": request.product_id,
         "quantity": request.quantity
-        
     }
-
