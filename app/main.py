@@ -69,7 +69,8 @@ class ProductRequest(BaseModel):
 
 
 class CartRequest(BaseModel):
-    total_amount: float
+    product_id: int
+    quantity: int
 
 
 class OrderRequest(BaseModel):
@@ -411,10 +412,29 @@ def create_cart(
     current_user: User_role = Depends(get_current_user)
 ):
     with engine.begin() as conn:
+
+        product_result = conn.execute(
+            product_table_name.select().where(
+                product_table_name.c.product_id == request.product_id
+            )
+        ).fetchone()
+
+        if product_result is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Product not found"
+            )
+
+        product = dict(product_result._mapping)
+
+        total_amount = product["price"] * request.quantity
+
         conn.execute(
             cart_table_name.insert().values(
                 user_id=current_user.user_id,
-                total_amount=request.total_amount
+                product_id=request.product_id,
+                quantity=request.quantity,
+                total_amount=total_amount
             )
         )
 
@@ -422,7 +442,9 @@ def create_cart(
         "cart": True,
         "status": "cart is created",
         "user_id": current_user.user_id,
-        "total_amount": request.total_amount
+        "product_id": request.product_id,
+        "quantity": request.quantity,
+        "total_amount": total_amount
     }
 
 
