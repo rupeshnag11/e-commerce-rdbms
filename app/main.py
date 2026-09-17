@@ -276,7 +276,6 @@ def health():
         "message": "OK"
     }
 
-
 @app.get("/users_details")
 def users_details(
     current_user: User_role = Depends(get_current_user)
