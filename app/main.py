@@ -1,80 +1,35 @@
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import  MetaData, Table
 from fastapi import FastAPI, Depends, HTTPException, Response
-from pydantic import BaseModel, EmailStr
 import os
-from sqlalchemy.orm import Session, sessionmaker, declarative_base
+from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
-load_dotenv()
+from app.models.models import User_role
+from app.database.database import get_db, engine
+from app.schemas.user import UserCreate, LoginRequest
+from app.schemas.product import ProductRequest
+from app.schemas.cart import CartRequest
+from app.schemas.order import OrderRequest
 
 app = FastAPI()
 
-database_url = os.getenv("DATABASE_URL")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRES_MINUTES = 30
 
-engine = create_engine(database_url)
-
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
-)
-
-Base = declarative_base()
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-class User_role(Base):
-    __tablename__ = "users_role"
-
-    user_id = Column(Integer, primary_key=True)
-    email = Column(String, unique=True)
-    username = Column(String, unique=True)
-    hashed_password = Column(String)
-
-
-class UserCreate(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-
-
-class UserResponse(BaseModel):
-    user_id: int
-    username: str
-    email: EmailStr
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class ProductRequest(BaseModel):
-    product_id: int
-    quantity: int
-
-
-class CartRequest(BaseModel):
-    product_id: int
-    quantity: int
-
-
-class OrderRequest(BaseModel):
-    total_amount: float
 
 
 pwd_context = CryptContext(
@@ -275,6 +230,18 @@ def health():
     return {
         "message": "OK"
     }
+
+
+@app.get("/products")
+def get_products():
+    with engine.connect() as conn:
+        result = conn.execute(
+            product_table_name.select().where(
+                product_table_name.c.is_active == True
+            )
+        )
+        return [dict(row._mapping) for row in result]
+
 
 @app.get("/users_details")
 def users_details(
