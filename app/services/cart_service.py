@@ -78,3 +78,39 @@ def create_cart_service(
         "quantity": request.quantity,
         "total_amount": total_amount
     }
+
+
+
+
+def get_cart_service(current_user):
+    with engine.connect() as conn:
+        cart_result = conn.execute(
+            cart_table_name.select().where(
+                cart_table_name.c.user_id == current_user.user_id,
+                cart_table_name.c.status == "active"
+            )
+        ).fetchone()
+
+        if cart_result is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Cart not found"
+            )
+
+        cart = dict(cart_result._mapping)
+
+        result = conn.execute(
+            cart_items_table_name.select().where(
+                cart_items_table_name.c.cart_id == cart["cart_id"]
+            )
+        )
+
+        items = [dict(row._mapping) for row in result]
+
+    return {
+        "cart_id": cart["cart_id"],
+        "user_id": current_user.user_id,
+        "total_amount": cart["total_amount"],
+        "status": cart["status"],
+        "items": items
+    }

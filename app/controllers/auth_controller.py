@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Response
+from fastapi import APIRouter, Depends, Response
 from app.schemas.user import UserCreate
 from app.schemas.user import LoginRequest
 from app.models.models import User_role
@@ -7,8 +7,9 @@ from sqlalchemy.orm import Session
 from app.services.auth_service import hashed_password, verify_password, create_access_token
 
 
-app = FastAPI()
-@app.post("/register")
+router = APIRouter()
+
+@router.post("/register")
 def register(user_data: UserCreate, 
             db: Session = Depends(get_db)):
     existing_mail = db.query(User_role).filter(
@@ -37,7 +38,7 @@ def register(user_data: UserCreate,
     }
 
 
-@app.post("/login")
+@router.post("/login")
 def login(
     user_data: LoginRequest,
     response: Response,
@@ -81,7 +82,7 @@ def login(
     }
 
 
-@app.post("/logout")
+@router.post("/logout")
 def logout(response: Response):
     response.delete_cookie("access_token")
 

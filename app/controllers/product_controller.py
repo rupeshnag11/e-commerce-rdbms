@@ -1,8 +1,8 @@
-from fastapi import FastAPI
+from fastapi import APIRouter
 from app.services.product_service import get_products_service
 
-app = FastAPI()
+router = APIRouter()
 
-@app.get("/products")
+@router.get("/products")
 def get_products():
     return get_products_service()
