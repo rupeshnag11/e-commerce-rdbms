@@ -4,6 +4,18 @@ from app.database.database import engine
 
 metadata = MetaData()
 
+cart_table_name = Table(
+    "cart",
+    metadata,
+    autoload_with=engine
+)
+
+cart_items_table_name = Table(
+    "cart_items",
+    metadata,
+    autoload_with=engine
+)
+
 order_table_name = Table(
     "orders",
     metadata,
@@ -108,22 +120,66 @@ def create_order_service(
     current_user
 ):
     with engine.begin() as conn:
+        cart_result = conn.execute(                          #users active cart search
+            cart_table_name.select().where(
+                cart_table_name.c.user_id == current_user.user_id,
+                cart_table_name.c.status == "active"
+            )
+        ).fetchone()
+        if cart_result is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Active cart not found"
+            )
+        cart_id = cart_result._mapping["cart_id"]
 
-        result = conn.execute(
+        cart_items_result = conn.execute(
+            cart_items_table_name.select().where(
+                cart_items_table_name.c.cart_id == cart_id,
+                cart_items_table_name.c.cart_item_id.in_(request.cart_item_ids)
+            )
+        ).fetchall()
+        cart_items = [dict(row._mapping) for row in cart_items_result]
+
+        if not cart_items:
+            raise HTTPException(
+                status_code=404,
+                detail="No cart items found for the provided IDs"
+            )
+        total_amount = 0
+        for item in cart_items:
+            total_amount += item["price"] * item["quantity"]
+
+        order_result = conn.execute(        #order creation for the user with total amount and user id
             order_table_name.insert()
             .values(
                 user_id=current_user.user_id,
-                total_amount=request.total_amount
-            )
-            .returning(order_table_name.c.order_id)
+                total_amount=total_amount
+            ).returning(order_table_name.c.order_id)
         )
+        order_id = order_result.scalar_one()  #order id is generated for the user
 
-        order_id = result.scalar_one()
-
-    return {
-        "order": True,
-        "status": "order is created",
-        "order_id": order_id,
-        "user_id": current_user.user_id,
-        "total_amount": request.total_amount
+        for item in cart_items: #order items creation
+            conn.execute(
+                order_items_table_name.insert().values(
+                    order_id=order_id,
+                    product_id=item["product_id"],
+                    quantity=item["quantity"],
+                    price=item["price"]
+                )
+            )
+        #items are removed from the cart after order creation
+        conn.execute(
+            cart_items_table_name.delete().where(
+                cart_items_table_name.c.cart_id == cart_id,
+                cart_items_table_name.c.cart_item_id.in_(request.cart_item_ids)
+            )
+        )
+        return {
+            "order": True,
+            "status": "order created successfully",
+            "order_id": order_id,
+            "user_id": current_user.user_id,
+            "total_amount": total_amount,
+            "cart_item_ids": request.cart_item_ids
     }

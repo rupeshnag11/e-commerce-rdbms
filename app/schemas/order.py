@@ -1,4 +1,4 @@
 from pydantic import BaseModel
 
 class OrderRequest(BaseModel):
-    total_amount: float
+    cart_item_ids : list[int]
