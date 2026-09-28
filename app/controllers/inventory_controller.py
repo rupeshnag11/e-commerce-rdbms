@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends
+from fastapi import APIRouter, Depends
 from app.models.models import User_role
 from app.schemas.product import ProductRequest
 from app.services.auth_service import get_current_user
@@ -8,10 +8,10 @@ from app.services.inventory_service import (
 )
 
 
-app = FastAPI()
+router = APIRouter()
 
 
-@app.post("/check_inventory")
+@router.post("/check_inventory")
 def check_inventory(
     request: ProductRequest,
     current_user: User_role = Depends(get_current_user)
@@ -22,7 +22,7 @@ def check_inventory(
     )
 
 
-@app.post("/inventory_update")
+@router.post("/inventory_update")
 def inventory_update(
     request: ProductRequest,
     current_user: User_role = Depends(get_current_user)
